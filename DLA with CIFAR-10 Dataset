@@ -38,49 +38,49 @@ class GlobalConvergenceTracker:
         self.patience = patience
         self.accuracy_plateau = accuracy_plateau
         self.min_rounds = min_rounds
-        
+
         # Dataset-specific convergence thresholds
         self.convergence_thresholds = {
             'MNIST': 95.0,        # Easy dataset - high threshold
-            'Fashion-MNIST': 85.0, # Moderate dataset - medium threshold  
+            'Fashion-MNIST': 85.0, # Moderate dataset - medium threshold
             'CIFAR-10': 75.0      # Hard dataset - lower threshold
         }
-        
+
         self.min_accuracy = self.convergence_thresholds.get(dataset_name, 75.0)
-        
+
         # Tracking variables
         self.no_improvement_count = 0
         self.best_accuracy = 0.0
         self.convergence_round = None
         self.converged = False
         self.accuracy_history = []
-        
+
     def update_accuracy(self, current_accuracy, round_num):
         """Update accuracy and check for convergence"""
         self.accuracy_history.append(current_accuracy)
-        
+
         # Don't check convergence until minimum rounds
         if round_num < self.min_rounds:
             return False
-            
+
         # Check for improvement
         if current_accuracy > self.best_accuracy + self.accuracy_plateau:
             self.best_accuracy = current_accuracy
             self.no_improvement_count = 0
         else:
             self.no_improvement_count += 1
-            
+
         # Check convergence criteria
         accuracy_threshold_met = current_accuracy >= self.min_accuracy
         plateau_reached = self.no_improvement_count >= self.patience
-        
+
         if accuracy_threshold_met and plateau_reached and not self.converged:
             self.convergence_round = round_num
             self.converged = True
             return True
-            
+
         return False
-        
+
     def get_convergence_info(self):
         """Get comprehensive convergence information"""
         return {
@@ -810,8 +810,8 @@ def create_federated_cifar10(num_clients=50, batch_size=64, iid=True, val_split=
 
 # =================== RESEARCH-GRADE FEDERATED TRAINING WITH GLOBAL EARLY STOPPING ===================
 
-def research_grade_federated_training_cifar10_with_early_stopping(clients, client_speeds, max_rounds, device, 
-                                                                 strategy="fedavg", max_layers=5, fixed_depth=3, 
+def research_grade_federated_training_cifar10_with_early_stopping(clients, client_speeds, max_rounds, device,
+                                                                 strategy="fedavg", max_layers=5, fixed_depth=3,
                                                                  test_loader=None, lr=0.001, max_local_epochs=15):
     """Research-grade federated training for CIFAR-10 with GLOBAL EARLY STOPPING"""
     global_model = CIFAR10Net().to(device)
@@ -819,7 +819,7 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
     # Initialize research-grade tracking
     straggler_tracker = ResearchGradeStragglerTracker(len(clients), client_speeds)
     efficiency_tracker = ResearchGradeEfficiencyTracker(len(clients))
-    
+
     # GLOBAL EARLY STOPPING TRACKER for CIFAR-10
     convergence_tracker = GlobalConvergenceTracker('CIFAR-10', patience=20, accuracy_plateau=0.1, min_rounds=75)
 
@@ -1009,7 +1009,7 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
                 print(f"   *** GLOBAL CONVERGENCE DETECTED at Round {r+1} ***")
                 print(f"   *** Accuracy: {test_acc:.2f}% >= Threshold: {convergence_tracker.min_accuracy}% ***")
                 print(f"   *** CIFAR-10 CNN converged - stopping early ***")
-                
+
                 # Record convergence metrics
                 results['rounds_to_convergence'] = r + 1
                 results['flops_until_convergence'] = int(np.sum(results['flops_per_round']))
@@ -1033,7 +1033,7 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
     # Final comprehensive statistics
     convergence_info = convergence_tracker.get_convergence_info()
     results['convergence_info'] = convergence_info
-    
+
     if not convergence_info['converged']:
         print(f"\n*** No convergence achieved within {max_rounds} rounds ***")
         results['rounds_to_convergence'] = max_rounds
@@ -1070,12 +1070,12 @@ def analyze_comprehensive_research_performance_cifar10_early_stop(all_results, s
         convergence_info = results.get('convergence_info', {})
         rounds_to_convergence = results.get('rounds_to_convergence', len(results['test_accuracies']))
         early_stopped = results.get('early_stopped', False)
-        
+
         # Efficiency metrics until convergence
         flops_until_convergence = results.get('flops_until_convergence', 0)
         comm_until_convergence = results.get('communication_until_convergence', 0)
         energy_until_convergence = results.get('energy_until_convergence', 0.0)
-        
+
         # Time efficiency
         total_time = float(np.sum(results.get('round_times', [])[:rounds_to_convergence]))
 
@@ -1110,7 +1110,7 @@ def analyze_comprehensive_research_performance_cifar10_early_stop(all_results, s
         }
 
         convergence_status = "CONVERGED EARLY" if early_stopped else "NO CONVERGENCE"
-        
+
         print(f"\n{strategy.upper()} - CIFAR-10 CNN Convergence Analysis:")
         print(f"   Final Accuracy: {final_accuracy:.2f}%")
         print(f"   Convergence Status: {convergence_status}")
@@ -1144,13 +1144,13 @@ def plot_convergence_analysis_cifar10(all_results, strategies):
             axes[0, 0].plot(rounds, results['test_accuracies'],
                            label=f'{strategy.upper()}', color=colors[i],
                            linewidth=2.5, linestyle=line_styles[i])
-            
+
             # Mark convergence point
             if results.get('early_stopped', False):
                 conv_round = results.get('rounds_to_convergence', len(results['test_accuracies']))
                 conv_acc = results['test_accuracies'][conv_round-1] if conv_round <= len(results['test_accuracies']) else results['test_accuracies'][-1]
                 axes[0, 0].scatter(conv_round, conv_acc, color=colors[i], s=100, marker='*', edgecolor='black', linewidth=1)
-                
+
     # Add convergence threshold line
     axes[0, 0].axhline(y=75.0, color='red', linestyle='--', alpha=0.7, label='Convergence Threshold (75%)')
     axes[0, 0].set_xlabel('Round')
@@ -1229,7 +1229,7 @@ def plot_convergence_analysis_cifar10(all_results, strategies):
             final_acc = results['test_accuracies'][-1]
             rounds = results.get('rounds_to_convergence', 400)
             early_stop = "✓" if results.get('early_stopped', False) else "✗"
-            
+
             summary_text.append(
                 f"{strategy.upper()}:\n"
                 f"  Accuracy: {final_acc:.1f}%\n"
@@ -1350,7 +1350,7 @@ def setup_research_environment():
 
 if __name__ == "__main__":
     setup_research_environment()
-    
+
     NUM_CLIENTS = 50
     MAX_LOCAL_EPOCHS = 15
     NUM_ROUNDS = 400  # Higher max since CNN convergence takes longer
