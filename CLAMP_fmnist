@@ -32,55 +32,57 @@ set_seed(42)
 # =================== GLOBAL EARLY STOPPING FRAMEWORK ===================
 
 class GlobalConvergenceTracker:
-    """Research-grade global convergence tracking with early stopping"""
-    def __init__(self, dataset_name, patience=20, accuracy_plateau=0.1, min_rounds=75):
+    """
+    Research-grade global convergence tracking with early stopping
+    """
+    def __init__(self, dataset_name, patience=15, accuracy_plateau=0.1, min_rounds=50):
         self.dataset_name = dataset_name
         self.patience = patience
         self.accuracy_plateau = accuracy_plateau
         self.min_rounds = min_rounds
-
+        
         # Dataset-specific convergence thresholds
         self.convergence_thresholds = {
             'MNIST': 95.0,        # Easy dataset - high threshold
-            'Fashion-MNIST': 85.0, # Moderate dataset - medium threshold
+            'Fashion-MNIST': 85.0, # Moderate dataset - medium threshold  
             'CIFAR-10': 75.0      # Hard dataset - lower threshold
         }
-
-        self.min_accuracy = self.convergence_thresholds.get(dataset_name, 75.0)
-
+        
+        self.min_accuracy = self.convergence_thresholds.get(dataset_name, 85.0)
+        
         # Tracking variables
         self.no_improvement_count = 0
         self.best_accuracy = 0.0
         self.convergence_round = None
         self.converged = False
         self.accuracy_history = []
-
+        
     def update_accuracy(self, current_accuracy, round_num):
         """Update accuracy and check for convergence"""
         self.accuracy_history.append(current_accuracy)
-
+        
         # Don't check convergence until minimum rounds
         if round_num < self.min_rounds:
             return False
-
+            
         # Check for improvement
         if current_accuracy > self.best_accuracy + self.accuracy_plateau:
             self.best_accuracy = current_accuracy
             self.no_improvement_count = 0
         else:
             self.no_improvement_count += 1
-
+            
         # Check convergence criteria
         accuracy_threshold_met = current_accuracy >= self.min_accuracy
         plateau_reached = self.no_improvement_count >= self.patience
-
+        
         if accuracy_threshold_met and plateau_reached and not self.converged:
             self.convergence_round = round_num
             self.converged = True
             return True
-
+            
         return False
-
+        
     def get_convergence_info(self):
         """Get comprehensive convergence information"""
         return {
@@ -166,8 +168,7 @@ class ResearchGradeStragglerTracker:
         normal_clients = self.participation_metrics['normal_capable_clients']
         fast_clients = self.participation_metrics['fast_capable_clients']
 
-        # 30% grace period for CNN complexity
-        accommodation_threshold = threshold * 1.3
+        accommodation_threshold = threshold * 1.2
 
         successful_slow = sum(1 for cid in slow_clients if client_times[cid] <= accommodation_threshold)
         successful_normal = sum(1 for cid in normal_clients if client_times[cid] <= threshold)
@@ -236,7 +237,7 @@ class ResearchGradeStragglerTracker:
 # =================== ENHANCED EFFICIENCY TRACKING ===================
 
 class ResearchGradeEfficiencyTracker:
-    """Research-grade efficiency tracking for CNN federated learning"""
+    """Research-grade efficiency tracking for MLP federated learning"""
     def __init__(self, num_clients):
         self.num_clients = num_clients
         self.client_flops = defaultdict(list)
@@ -255,125 +256,55 @@ class ResearchGradeEfficiencyTracker:
             'start_memory': torch.cuda.memory_allocated() if torch.cuda.is_available() else 0
         }
 
-    def calculate_cnn_training_flops(self, model, batch_size, active_depth, input_shape=(3, 32, 32)):
-        """Calculate accurate CNN training FLOPs following computer vision literature standards"""
+    def calculate_mlp_training_flops(self, model, batch_size, active_layers_count):
+        """Calculate accurate MLP training FLOPs following ML literature standards"""
         total_flops = 0
+        linear_layers = [module for module in model.model.modules() if isinstance(module, nn.Linear)]
+        active_layers = linear_layers[:active_layers_count] if active_layers_count <= len(linear_layers) else linear_layers
 
-        # CNN-specific FLOP calculation for CIFAR-10
-        current_channels = input_shape[0]  # Start with 3 channels
-        current_h, current_w = input_shape[1], input_shape[2]  # 32x32
-
-        # Convolutional layers FLOPs (based on active depth)
-        conv_configs = [
-            (32, 3, 1, 1),   # conv1: 32 filters, 3x3 kernel, stride 1, padding 1
-            (64, 3, 1, 1),   # conv2: 64 filters, 3x3 kernel, stride 1, padding 1
-            (128, 3, 1, 1),  # conv3: 128 filters, 3x3 kernel, stride 1, padding 1
-            (256, 3, 1, 1),  # conv4: 256 filters, 3x3 kernel, stride 1, padding 1
-            (512, 3, 1, 1),  # conv5: 512 filters, 3x3 kernel, stride 1, padding 1
-        ]
-
-        for layer_idx in range(min(active_depth, len(conv_configs))):
-            out_channels, kernel_size, stride, padding = conv_configs[layer_idx]
-
-            # Output dimensions after convolution
-            out_h = (current_h + 2 * padding - kernel_size) // stride + 1
-            out_w = (current_w + 2 * padding - kernel_size) // stride + 1
-
-            # Convolution FLOPs: output_elements × (kernel_ops + bias)
-            kernel_ops = kernel_size * kernel_size * current_channels
-            output_elements = batch_size * out_channels * out_h * out_w
-            conv_flops = output_elements * (kernel_ops + 1)  # +1 for bias
-
-            # BatchNorm FLOPs: 2 operations per output element (scale + shift)
-            bn_flops = 2 * output_elements
-
-            # Activation FLOPs (ReLU): 1 operation per output element
-            activation_flops = output_elements
-
-            # Forward pass FLOPs for this layer
-            forward_flops = conv_flops + bn_flops + activation_flops
-
-            # Backward pass: approximately 2x forward pass
+        for layer in active_layers:
+            forward_flops = batch_size * layer.in_features * layer.out_features
             backward_flops = 2 * forward_flops
-
-            # Total FLOPs for this layer
-            layer_total_flops = forward_flops + backward_flops
-            total_flops += layer_total_flops
-
-            # Update dimensions for next layer
-            current_channels = out_channels
-            current_h, current_w = out_h, out_w
-
-            # Apply pooling after layers 1, 2, 3
-            if layer_idx in [0, 1, 2]:
-                # MaxPool2d(2, 2) - halves dimensions
-                current_h //= 2
-                current_w //= 2
-                # Pooling FLOPs: output_elements (comparison operations)
-                pool_output_elements = batch_size * current_channels * current_h * current_w
-                total_flops += pool_output_elements
-
-        # Fully connected layers FLOPs (depth-specific)
-        # After adaptive pooling, spatial dimensions become 1x1
-        fc_input_features = current_channels  # After adaptive pooling
-
-        # FC layer configurations based on depth
-        fc_configs = {
-            1: [(32, 128), (128, 10)],      # fc_depth1
-            2: [(64, 128), (128, 10)],      # fc_depth2
-            3: [(128, 256), (256, 10)],     # fc_depth3
-            4: [(256, 256), (256, 10)],     # fc_depth4
-            5: [(512, 256), (256, 10)]      # fc_depth5
-        }
-
-        if active_depth in fc_configs:
-            fc_layers = fc_configs[active_depth]
-            # Override first layer input based on actual CNN output
-            fc_layers[0] = (fc_input_features, fc_layers[0][1])
-
-            for in_features, out_features in fc_layers:
-                # Forward pass: batch_size × in_features × out_features
-                fc_forward = batch_size * in_features * out_features
-                # Backward pass: 2x forward (gradients + weight updates)
-                fc_backward = 2 * fc_forward
-                total_flops += fc_forward + fc_backward
+            layer_flops = forward_flops + backward_flops
+            total_flops += layer_flops
 
         return int(total_flops)
 
-    def calculate_cnn_communication_cost(self, strategy, model_state_dict, active_depth):
-        """Calculate CNN communication cost with bidirectional tracking"""
-        # Calculate full model size (all parameters)
+    def calculate_federated_communication_cost(self, strategy, full_model_state_dict, active_layers_count):
+        """Calculate bidirectional communication cost with protocol overhead"""
         full_model_size = 0
-        for param in model_state_dict.values():
-            full_model_size += param.numel() * 4  # 4 bytes per float32
+        for param in full_model_state_dict.values():
+            full_model_size += param.numel() * 4
 
-        # Calculate active model size based on depth
         active_model_size = 0
+        linear_layers = [name for name in full_model_state_dict.keys()
+                        if 'weight' in name or 'bias' in name]
 
-        for name in model_state_dict.keys():
-            if 'conv' in name or 'bn' in name:
-                # Extract layer number from name (conv1, conv2, etc.)
-                layer_num = int(''.join(filter(str.isdigit, name.split('.')[0])))
-                if layer_num <= active_depth:
-                    active_model_size += model_state_dict[name].numel() * 4
-            elif f'fc_depth{active_depth}' in name:
-                # Only count FC layer corresponding to active depth
-                active_model_size += model_state_dict[name].numel() * 4
+        total_layers = len([name for name in linear_layers if 'weight' in name])
+        if total_layers > 0:
+            layers_to_include = min(active_layers_count, total_layers)
+            layers_to_skip = max(0, total_layers - layers_to_include)
 
-        # Bidirectional communication (Best Practice)
+            layer_count = 0
+            for name, param in full_model_state_dict.items():
+                if 'weight' in name:
+                    if layer_count >= layers_to_skip:
+                        active_model_size += param.numel() * 4
+                        bias_name = name.replace('weight', 'bias')
+                        if bias_name in full_model_state_dict:
+                            active_model_size += full_model_state_dict[bias_name].numel() * 4
+                    layer_count += 1
+
         if strategy == "fedavg":
-            # Full model both directions
-            downstream_bytes = full_model_size  # Server → Client
-            upstream_bytes = full_model_size    # Client → Server
+            downstream_bytes = full_model_size
+            upstream_bytes = full_model_size
         elif strategy in ["fedpmt", "feddrop", "dla"]:
-            # Full model download, partial upload
             downstream_bytes = full_model_size
             upstream_bytes = active_model_size
         else:
             downstream_bytes = full_model_size
             upstream_bytes = full_model_size
 
-        # Protocol overhead (Industry standard: 5%)
         protocol_overhead = (downstream_bytes + upstream_bytes) * 0.05
         total_communication = downstream_bytes + upstream_bytes + protocol_overhead
 
@@ -388,17 +319,17 @@ class ResearchGradeEfficiencyTracker:
 
     def end_client_monitoring(self, client_id, start_metrics, model_state_dict,
                              layer_depth, strategy, batch_size=64):
-        """End monitoring and calculate comprehensive CNN efficiency metrics"""
+        """End monitoring and calculate comprehensive efficiency metrics"""
         end_time = time.time()
         end_memory = torch.cuda.memory_allocated() if torch.cuda.is_available() else 0
 
         training_time = end_time - start_metrics['start_time']
         memory_used = abs(end_memory - start_metrics['start_memory'])
 
-        # Accurate CNN FLOPs calculation
-        flops = self.calculate_cnn_training_flops(CIFAR10Net(), batch_size, layer_depth)
-        comm_cost = self.calculate_cnn_communication_cost(strategy, model_state_dict, layer_depth)
-        estimated_energy = training_time * 75.0  # 75W for CNN training (higher than MLP)
+        temp_model = MNISTNet()
+        flops = self.calculate_mlp_training_flops(temp_model, batch_size, layer_depth)
+        comm_cost = self.calculate_federated_communication_cost(strategy, model_state_dict, layer_depth)
+        estimated_energy = training_time * 40.0
 
         self.client_flops[client_id].append(flops)
         self.client_memory_usage[client_id].append(int(memory_used))
@@ -413,140 +344,53 @@ class ResearchGradeEfficiencyTracker:
             'memory_used': int(memory_used)
         }
 
-# =================== CIFAR-10 CNN ARCHITECTURE ===================
+# =================== MNIST MODEL ARCHITECTURE ===================
 
-class CIFAR10Net(nn.Module):
-    """Research-grade CIFAR-10 CNN architecture optimized for federated learning"""
-    def __init__(self, num_classes=10, dropout_rate=0.3):
-        super(CIFAR10Net, self).__init__()
+class MNISTNet(nn.Module):
+    """Research-grade MNIST neural network architecture"""
+    def __init__(self, input_size=784, hidden_sizes=[512, 256, 128, 64], num_classes=10, dropout_rate=0.3):
+        super(MNISTNet, self).__init__()
+        layers = []
+        prev_size = input_size
 
-        # Convolutional layers with batch normalization
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.bn4 = nn.BatchNorm2d(256)
-        self.conv5 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
-        self.bn5 = nn.BatchNorm2d(512)
+        for i, hidden_size in enumerate(hidden_sizes):
+            layers.append(nn.Linear(prev_size, hidden_size))
+            layers.append(nn.ReLU())
+            if i < len(hidden_sizes) - 1:
+                layers.append(nn.Dropout(dropout_rate))
+            prev_size = hidden_size
 
-        # Pooling and adaptive pooling
-        self.pool = nn.MaxPool2d(2, 2)
-        self.dropout = nn.Dropout(dropout_rate)
-        self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
+        layers.append(nn.Linear(prev_size, num_classes))
+        self.model = nn.Sequential(*layers)
 
-        # Depth-specific FC layers for DLA
-        self.fc_depth1 = nn.Sequential(
-            nn.Linear(32, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(128, num_classes)
-        )
-        self.fc_depth2 = nn.Sequential(
-            nn.Linear(64, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(128, num_classes)
-        )
-        self.fc_depth3 = nn.Sequential(
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(256, num_classes)
-        )
-        self.fc_depth4 = nn.Sequential(
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(256, num_classes)
-        )
-        self.fc_depth5 = nn.Sequential(
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(256, num_classes)
-        )
+    def forward(self, x):
+        return self.model(x)
 
-        # Layer organization for dynamic depth
-        self.conv_layers = [
-            (self.conv1, self.bn1),
-            (self.conv2, self.bn2),
-            (self.conv3, self.bn3),
-            (self.conv4, self.bn4),
-            (self.conv5, self.bn5)
-        ]
+def apply_layer_mask(model, layers_to_update):
+    """Apply mask to update only the last 'layers_to_update' layers"""
+    all_layers = [module for module in model.model.modules()
+                  if isinstance(module, nn.Linear)]
 
-    def forward(self, x, depth=5):
-        """Forward pass with dynamic depth support"""
-        depth = min(depth, len(self.conv_layers))
-        depth = max(depth, 1)
+    total_linear_layers = len(all_layers)
+    layers_to_freeze = max(0, total_linear_layers - layers_to_update)
 
-        # Apply convolutional layers up to specified depth
-        for i in range(depth):
-            conv, bn = self.conv_layers[i]
-            x = conv(x)
-            x = bn(x)
-            x = F.relu(x)
-
-            # Apply pooling after layers 1, 2, 3
-            if i in [0, 1, 2]:
-                x = self.pool(x)
-
-        # Adaptive pooling for consistent feature maps
-        x = self.adaptive_pool(x)
-        x = torch.flatten(x, 1)
-
-        # Use depth-specific FC layer
-        if depth == 1:
-            x = self.fc_depth1(x)
-        elif depth == 2:
-            x = self.fc_depth2(x)
-        elif depth == 3:
-            x = self.fc_depth3(x)
-        elif depth == 4:
-            x = self.fc_depth4(x)
-        else:  # depth == 5
-            x = self.fc_depth5(x)
-
-        return x
-
-def apply_layer_mask_cifar10(model, layers_to_update):
-    """Apply mask for CNN layers with proper gradient control"""
-    # Get all convolutional and batch norm layers
-    conv_bn_layers = []
-    for conv, bn in model.conv_layers:
-        conv_bn_layers.extend([conv, bn])
-
-    total_conv_layers = len(conv_bn_layers)
-    layers_to_freeze = max(0, total_conv_layers - layers_to_update * 2)
-
-    # Freeze/unfreeze convolutional layers
-    for i, layer in enumerate(conv_bn_layers):
+    for i, layer in enumerate(all_layers):
         requires_grad = (i >= layers_to_freeze)
-        for param in layer.parameters():
-            param.requires_grad = requires_grad
-
-    # Enable gradients for appropriate FC layer only
-    fc_layers = [model.fc_depth1, model.fc_depth2, model.fc_depth3, model.fc_depth4, model.fc_depth5]
-
-    for i, fc_layer in enumerate(fc_layers):
-        requires_grad = (i + 1) == layers_to_update
-        for param in fc_layer.parameters():
-            param.requires_grad = requires_grad
+        if hasattr(layer, 'weight'):
+            layer.weight.requires_grad = requires_grad
+        if hasattr(layer, 'bias') and layer.bias is not None:
+            layer.bias.requires_grad = requires_grad
 
 # =================== ENHANCED TRAINING FUNCTIONS ===================
 
-def train_locally_with_monitoring_cifar10(model, train_loader, val_loader, layers_to_update, device,
-                                          client_speed=1.0, max_epochs=15, lr=0.001, patience=5):
-    """Enhanced local training with comprehensive monitoring for CIFAR-10"""
+def train_locally_with_monitoring(model, train_loader, val_loader, layers_to_update, device,
+                                 client_speed=1.0, max_epochs=15, lr=0.001, patience=5):
+    """Enhanced local training with comprehensive monitoring"""
     model = copy.deepcopy(model).to(device)
-    apply_layer_mask_cifar10(model, layers_to_update)
+    apply_layer_mask(model, layers_to_update)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
-                          lr=lr, weight_decay=1e-4)
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr)
 
     start_time = time.time()
 
@@ -566,7 +410,7 @@ def train_locally_with_monitoring_cifar10(model, train_loader, val_loader, layer
         for batch_idx, (X, y) in enumerate(train_loader):
             X, y = X.to(device), y.to(device)
             optimizer.zero_grad()
-            output = model(X, depth=layers_to_update)
+            output = model(X)
             loss = criterion(output, y)
             loss.backward()
             optimizer.step()
@@ -587,7 +431,7 @@ def train_locally_with_monitoring_cifar10(model, train_loader, val_loader, layer
         with torch.no_grad():
             for X_val, y_val in val_loader:
                 X_val, y_val = X_val.to(device), y_val.to(device)
-                outputs = model(X_val, depth=layers_to_update)
+                outputs = model(X_val)
                 val_loss += criterion(outputs, y_val).item()
                 _, predicted = torch.max(outputs.data, 1)
                 total += y_val.size(0)
@@ -621,13 +465,13 @@ def train_locally_with_monitoring_cifar10(model, train_loader, val_loader, layer
     return (model.state_dict(), elapsed_time, final_train_loss,
             final_val_accuracy, epochs_trained, train_losses, val_losses, val_accuracies)
 
-# =================== DLA IMPLEMENTATION FOR CIFAR-10 ===================
+# =================== DLA IMPLEMENTATION ===================
 
-def adjust_layers_improved_cifar10(elapsed_time, current_depth, client_id,
-                                  T_low=20.0, T_high=60.0, max_layers=5):
-    """CNN-optimized layer adjustment with higher thresholds for CIFAR-10 complexity"""
-    client_T_low = T_low * (0.8 + client_id * 0.05)
-    client_T_high = T_high * (0.9 + client_id * 0.1)
+def adjust_layers_improved(elapsed_time, current_depth, client_id,
+                         T_low=8.0, T_high=25.0, max_layers=5):
+    """Improved layer adjustment with thresholds optimized for MNIST simplicity"""
+    client_T_low = T_low * (0.7 + client_id * 0.1)
+    client_T_high = T_high * (0.8 + client_id * 0.2)
 
     if elapsed_time > client_T_high and current_depth > 1:
         return current_depth - 1
@@ -637,7 +481,7 @@ def adjust_layers_improved_cifar10(elapsed_time, current_depth, client_id,
         return current_depth
 
 class DLAStabilityTracker:
-    """Enhanced DLA stability tracking for CNN complexity"""
+    """Enhanced DLA stability tracking"""
     def __init__(self, num_clients):
         self.adaptation_history = {cid: [] for cid in range(num_clients)}
         self.consecutive_suggestions = {cid: {'increase': 0, 'decrease': 0, 'stay': 0}
@@ -646,7 +490,7 @@ class DLAStabilityTracker:
 
     def should_adapt(self, client_id, current_depth, suggested_depth,
                     client_performance=None, stability_threshold=3):
-        """Enhanced adaptation decision for CNN training"""
+        """Enhanced adaptation decision"""
         if client_performance is not None:
             self.performance_history[client_id].append(client_performance)
 
@@ -676,8 +520,8 @@ class DLAStabilityTracker:
 
 # =================== EVALUATION AND AGGREGATION ===================
 
-def evaluate_model_cifar10(model, test_loader, device, depth=5):
-    """Enhanced model evaluation for CIFAR-10"""
+def evaluate_model(model, test_loader, device):
+    """Enhanced model evaluation"""
     model.eval()
     correct = 0
     total = 0
@@ -687,7 +531,7 @@ def evaluate_model_cifar10(model, test_loader, device, depth=5):
     with torch.no_grad():
         for X, y in test_loader:
             X, y = X.to(device), y.to(device)
-            outputs = model(X, depth=depth)
+            outputs = model(X)
             loss = criterion(outputs, y)
             total_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
@@ -699,61 +543,44 @@ def evaluate_model_cifar10(model, test_loader, device, depth=5):
     return float(accuracy), float(avg_loss)
 
 def average_weights(weight_list, client_sizes=None):
-    """Enhanced weighted average handling CNN parameters"""
+    """Weighted average of model weights"""
     if client_sizes is None:
         client_sizes = [1] * len(weight_list)
 
     total_size = sum(client_sizes)
     avg_weights = copy.deepcopy(weight_list[0])
 
-    # Initialize with zeros, preserving original dtypes
     for key in avg_weights:
-        avg_weights[key] = torch.zeros_like(avg_weights[key], dtype=avg_weights[key].dtype)
+        avg_weights[key] = torch.zeros_like(avg_weights[key])
 
-    # Weighted sum with proper CNN parameter handling
     for i, weights in enumerate(weight_list):
-        weight_factor = client_sizes[i] / total_size
+        weight = client_sizes[i] / total_size
         for key in avg_weights:
-            if key in weights:
-                # Handle BatchNorm tracking parameters
-                if 'num_batches_tracked' in key:
-                    avg_weights[key] = weights[key].clone()
-                else:
-                    avg_weights[key] += weights[key] * weight_factor
+            avg_weights[key] += weights[key] * weight
 
     return avg_weights
 
 # =================== FEDERATED DATASET CREATION ===================
 
-def create_federated_cifar10(num_clients=50, batch_size=64, iid=True, val_split=0.2):
-    """Create research-grade federated CIFAR-10 dataset"""
-    print("Downloading CIFAR-10 dataset...")
+def create_federated_mnist(num_clients=50, batch_size=64, iid=True, val_split=0.2):
+    """Create research-grade federated MNIST dataset"""
+    print("Downloading MNIST dataset...")
 
-    # CIFAR-10 optimized transforms with data augmentation
-    transform_train = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
+    transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        transforms.Normalize((0.1307,), (0.3081,)),
+        transforms.Lambda(lambda x: x.view(-1))
     ])
 
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
-
-    train_dataset = torchvision.datasets.CIFAR10(
-        root='./data', train=True, download=True, transform=transform_train
+    train_dataset = torchvision.datasets.MNIST(
+        root='./data', train=True, download=True, transform=transform
     )
-    test_dataset = torchvision.datasets.CIFAR10(
-        root='./data', train=False, download=True, transform=transform_test
+    test_dataset = torchvision.datasets.MNIST(
+        root='./data', train=False, download=True, transform=transform
     )
 
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    # CIFAR-10 class names
-    cifar10_classes = ['airplane', 'automobile', 'bird', 'cat', 'deer',
-                      'dog', 'frog', 'horse', 'ship', 'truck']
+    mnist_classes = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 
     total_samples = len(train_dataset)
     base_samples_per_client = total_samples // num_clients
@@ -761,7 +588,7 @@ def create_federated_cifar10(num_clients=50, batch_size=64, iid=True, val_split=
     clients = []
     client_speeds = []
 
-    print(f"Creating {num_clients} federated CIFAR-10 clients...")
+    print(f"Creating {num_clients} federated MNIST clients...")
 
     for client_id in range(num_clients):
         if client_id < num_clients * 0.1:
@@ -790,8 +617,8 @@ def create_federated_cifar10(num_clients=50, batch_size=64, iid=True, val_split=
             indices = indices[:client_samples]
 
             if client_id < 5:
-                client_specialization = [cifar10_classes[i] for i in target_classes]
-                print(f"Client {client_id} specializes in: {client_specialization}")
+                client_specialization = [mnist_classes[i] for i in target_classes]
+                print(f"Client {client_id} specializes in digits: {client_specialization}")
 
         client_dataset = Subset(train_dataset, indices)
         train_size = int((1 - val_split) * len(client_dataset))
@@ -805,23 +632,25 @@ def create_federated_cifar10(num_clients=50, batch_size=64, iid=True, val_split=
         clients.append((train_loader, val_loader, len(client_dataset)))
         client_speeds.append(speed_factor)
 
-    print(f"Created {num_clients} CIFAR-10 clients with {total_samples} total samples")
+    print(f"Created {num_clients} MNIST clients with {total_samples} total samples")
     return clients, test_loader, client_speeds
 
 # =================== RESEARCH-GRADE FEDERATED TRAINING WITH GLOBAL EARLY STOPPING ===================
 
-def research_grade_federated_training_cifar10_with_early_stopping(clients, client_speeds, max_rounds, device,
-                                                                 strategy="fedavg", max_layers=5, fixed_depth=3,
-                                                                 test_loader=None, lr=0.001, max_local_epochs=15):
-    """Research-grade federated training for CIFAR-10 with GLOBAL EARLY STOPPING"""
-    global_model = CIFAR10Net().to(device)
+def research_grade_federated_training_mnist_with_early_stopping(clients, client_speeds, max_rounds, device, 
+                                                               strategy="fedavg", max_layers=5, fixed_depth=3, 
+                                                               test_loader=None, lr=0.001, max_local_epochs=15):
+    """
+    Research-grade federated training for MNIST with GLOBAL EARLY STOPPING
+    """
+    global_model = MNISTNet().to(device)
 
     # Initialize research-grade tracking
     straggler_tracker = ResearchGradeStragglerTracker(len(clients), client_speeds)
     efficiency_tracker = ResearchGradeEfficiencyTracker(len(clients))
-
-    # GLOBAL EARLY STOPPING TRACKER for CIFAR-10
-    convergence_tracker = GlobalConvergenceTracker('CIFAR-10', patience=20, accuracy_plateau=0.1, min_rounds=75)
+    
+    # GLOBAL EARLY STOPPING TRACKER
+    convergence_tracker = GlobalConvergenceTracker('MNIST', patience=15, accuracy_plateau=0.1, min_rounds=50)
 
     # Comprehensive results tracking
     results = {
@@ -857,11 +686,11 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
     current_depths = {cid: 3 for cid in range(len(clients))}
     dla_tracker = DLAStabilityTracker(len(clients)) if strategy == "dla" else None
 
-    print(f"\nRESEARCH-GRADE CIFAR-10 CNN FEDERATED LEARNING WITH GLOBAL EARLY STOPPING")
+    print(f"\nRESEARCH-GRADE MNIST FEDERATED LEARNING WITH GLOBAL EARLY STOPPING")
     print(f"Strategy: {strategy.upper()}")
     print(f"Clients: {len(clients)}")
-    print(f"Max Rounds: {max_rounds} | Early Stop Threshold: 75.0% | Patience: 20 rounds")
-    print(f"Object Classes: airplane, automobile, bird, cat, deer, dog, frog, horse, ship, truck")
+    print(f"Max Rounds: {max_rounds} | Early Stop Threshold: 95.0% | Patience: 15 rounds")
+    print(f"Comprehensive Tracking: Enabled")
     print("-" * 80)
 
     for r in range(max_rounds):
@@ -895,7 +724,7 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
             start_metrics = efficiency_tracker.start_client_monitoring(cid)
 
             # Local training
-            training_results = train_locally_with_monitoring_cifar10(
+            training_results = train_locally_with_monitoring(
                 global_model, train_loader, val_loader, layer_depth, device,
                 client_speed=client_speeds[cid], max_epochs=max_local_epochs, lr=lr, patience=5
             )
@@ -929,10 +758,10 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
                       f"(↓{comm['downstream_bytes']/1024:.1f}KB + ↑{comm['upstream_bytes']/1024:.1f}KB), "
                       f"Energy={efficiency_metrics['energy']:.1f}J")
 
-            # DLA depth adaptation (CNN-specific thresholds)
+            # DLA depth adaptation (MNIST-specific thresholds)
             if strategy == "dla":
-                suggested_depth = adjust_layers_improved_cifar10(elapsed_time, layer_depth, cid,
-                                                               T_low=20.0, T_high=60.0, max_layers=max_layers)
+                suggested_depth = adjust_layers_improved(elapsed_time, layer_depth, cid,
+                                                       T_low=8.0, T_high=25.0, max_layers=max_layers)
                 new_depth = dla_tracker.should_adapt(cid, layer_depth, suggested_depth,
                                                     client_performance=final_val_accuracy, stability_threshold=3)
                 current_depths[cid] = new_depth
@@ -977,12 +806,12 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
         total_comm = float(np.sum(round_comm_costs)) / 1024
         total_energy = float(np.sum(round_energy))
 
-        print(f"\nRound {r+1} CIFAR-10 CNN Research Analysis:")
+        print(f"\nRound {r+1} MNIST Research-Grade Analysis:")
         print(f"   Median Training Time: {median_time:.1f}s")
         print(f"   Stragglers: {straggler_count}/{len(clients)} ({straggler_count/len(clients)*100:.1f}%)")
         print(f"   Slow Device Inclusion: {participation_analysis['slow_inclusion_rate']*100:.1f}%")
         print(f"   Accommodation Success: {participation_analysis['accommodation_efficiency']*100:.1f}%")
-        print(f"   Total CNN FLOPs: {avg_flops*len(clients):.1f}M")
+        print(f"   Total MLP FLOPs: {avg_flops*len(clients):.1f}M")
         print(f"   Total Communication: {total_comm:.1f}KB")
         print(f"   Total Energy: {total_energy:.1f}J")
         if straggler_ids:
@@ -994,22 +823,22 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
 
         # Global model evaluation
         if test_loader:
-            test_acc, test_loss = evaluate_model_cifar10(global_model, test_loader, device, depth=max_layers)
+            test_acc, test_loss = evaluate_model(global_model, test_loader, device)
             results['test_accuracies'].append(test_acc)
             results['test_losses'].append(test_loss)
 
             print(f"   Global Test Accuracy: {test_acc:.2f}%")
             if current_flops > 0:
                 efficiency_score = test_acc / max(avg_flops, 1e-10)
-                print(f"   CNN Efficiency: {efficiency_score:.2f} acc/MFLOP")
+                print(f"   MLP Efficiency: {efficiency_score:.2f} acc/MFLOP")
 
             # CHECK FOR GLOBAL CONVERGENCE
             converged = convergence_tracker.update_accuracy(test_acc, r + 1)
             if converged:
                 print(f"   *** GLOBAL CONVERGENCE DETECTED at Round {r+1} ***")
                 print(f"   *** Accuracy: {test_acc:.2f}% >= Threshold: {convergence_tracker.min_accuracy}% ***")
-                print(f"   *** CIFAR-10 CNN converged - stopping early ***")
-
+                print(f"   *** Stopping early to save resources ***")
+                
                 # Record convergence metrics
                 results['rounds_to_convergence'] = r + 1
                 results['flops_until_convergence'] = int(np.sum(results['flops_per_round']))
@@ -1027,13 +856,13 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
             print(f"\nProgress: {r+1}/{max_rounds} rounds completed")
             if results['test_accuracies']:
                 current_acc = results['test_accuracies'][-1]
-                print(f"   Current CIFAR-10 CNN Accuracy: {current_acc:.2f}%")
+                print(f"   Current MNIST Accuracy: {current_acc:.2f}%")
                 print(f"   Target for Early Stop: {convergence_tracker.min_accuracy}%")
 
     # Final comprehensive statistics
     convergence_info = convergence_tracker.get_convergence_info()
     results['convergence_info'] = convergence_info
-
+    
     if not convergence_info['converged']:
         print(f"\n*** No convergence achieved within {max_rounds} rounds ***")
         results['rounds_to_convergence'] = max_rounds
@@ -1049,11 +878,11 @@ def research_grade_federated_training_cifar10_with_early_stopping(clients, clien
 
 # =================== RESEARCH-GRADE ANALYSIS FUNCTIONS ===================
 
-def analyze_comprehensive_research_performance_cifar10_early_stop(all_results, strategies, straggler_trackers, efficiency_trackers):
-    """Research-grade comprehensive analysis for CIFAR-10 CNN with early stopping"""
+def analyze_comprehensive_research_performance_mnist_early_stop(all_results, strategies, straggler_trackers, efficiency_trackers):
+    """Research-grade comprehensive analysis for MNIST MLP federated learning with early stopping"""
     print(f"\n{'='*80}")
-    print("RESEARCH-GRADE CIFAR-10 CNN PERFORMANCE ANALYSIS WITH GLOBAL EARLY STOPPING")
-    print("Computer Vision Federated Learning with Convergence Efficiency")
+    print("RESEARCH-GRADE MNIST MLP PERFORMANCE ANALYSIS WITH GLOBAL EARLY STOPPING")
+    print("Digit Recognition Federated Learning with Convergence Efficiency")
     print(f"{'='*80}")
 
     analysis_summary = {}
@@ -1070,12 +899,12 @@ def analyze_comprehensive_research_performance_cifar10_early_stop(all_results, s
         convergence_info = results.get('convergence_info', {})
         rounds_to_convergence = results.get('rounds_to_convergence', len(results['test_accuracies']))
         early_stopped = results.get('early_stopped', False)
-
+        
         # Efficiency metrics until convergence
         flops_until_convergence = results.get('flops_until_convergence', 0)
         comm_until_convergence = results.get('communication_until_convergence', 0)
         energy_until_convergence = results.get('energy_until_convergence', 0.0)
-
+        
         # Time efficiency
         total_time = float(np.sum(results.get('round_times', [])[:rounds_to_convergence]))
 
@@ -1110,8 +939,8 @@ def analyze_comprehensive_research_performance_cifar10_early_stop(all_results, s
         }
 
         convergence_status = "CONVERGED EARLY" if early_stopped else "NO CONVERGENCE"
-
-        print(f"\n{strategy.upper()} - CIFAR-10 CNN Convergence Analysis:")
+        
+        print(f"\n{strategy.upper()} - MLP Convergence Analysis:")
         print(f"   Final Accuracy: {final_accuracy:.2f}%")
         print(f"   Convergence Status: {convergence_status}")
         print(f"   Rounds to Convergence: {rounds_to_convergence}")
@@ -1121,50 +950,50 @@ def analyze_comprehensive_research_performance_cifar10_early_stop(all_results, s
         print(f"   Energy until Convergence: {energy_until_convergence:.1f} J")
         print(f"   Stragglers until Convergence: {stragglers_until_convergence}")
         print(f"   Slow Device Inclusion: {slow_inclusion_rate*100:.1f}%")
-        print(f"   CONVERGENCE CNN Computational Efficiency: {convergence_computational_efficiency:.4f} acc/GFLOP")
-        print(f"   CONVERGENCE CNN Communication Efficiency: {convergence_communication_efficiency:.4f} acc/MB")
-        print(f"   CONVERGENCE CNN Time Efficiency: {convergence_time_efficiency:.4f} acc/s")
+        print(f"   CONVERGENCE Computational Efficiency: {convergence_computational_efficiency:.4f} acc/GFLOP")
+        print(f"   CONVERGENCE Communication Efficiency: {convergence_communication_efficiency:.4f} acc/MB")
+        print(f"   CONVERGENCE Time Efficiency: {convergence_time_efficiency:.4f} acc/s")
 
     return analysis_summary
 
-def plot_convergence_analysis_cifar10(all_results, strategies):
-    """Research-grade convergence visualization for CIFAR-10 CNN"""
+def plot_convergence_analysis_mnist(all_results, strategies):
+    """Research-grade convergence visualization for MNIST"""
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('CIFAR-10 CNN Federated Learning - Global Early Stopping Analysis\n(Computer Vision Convergence Efficiency)',
+    fig.suptitle('MNIST MLP Federated Learning - Global Early Stopping Analysis\n(Convergence Efficiency Comparison)',
                  fontsize=16, fontweight='bold')
 
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
     line_styles = ['-', '--', '-.', ':']
 
-    # 1. CNN Accuracy Evolution with Convergence Points
-    axes[0, 0].set_title('CIFAR-10 CNN Accuracy Evolution\n(Early Stopping Points)', fontsize=12, fontweight='bold')
+    # 1. Accuracy Evolution with Convergence Points
+    axes[0, 0].set_title('MNIST Accuracy Evolution\n(Early Stopping Points)', fontsize=12, fontweight='bold')
     for i, (strategy, results) in enumerate(zip(strategies, all_results)):
         if results['test_accuracies']:
             rounds = range(1, len(results['test_accuracies'])+1)
             axes[0, 0].plot(rounds, results['test_accuracies'],
                            label=f'{strategy.upper()}', color=colors[i],
                            linewidth=2.5, linestyle=line_styles[i])
-
+            
             # Mark convergence point
             if results.get('early_stopped', False):
                 conv_round = results.get('rounds_to_convergence', len(results['test_accuracies']))
                 conv_acc = results['test_accuracies'][conv_round-1] if conv_round <= len(results['test_accuracies']) else results['test_accuracies'][-1]
                 axes[0, 0].scatter(conv_round, conv_acc, color=colors[i], s=100, marker='*', edgecolor='black', linewidth=1)
-
+                
     # Add convergence threshold line
-    axes[0, 0].axhline(y=75.0, color='red', linestyle='--', alpha=0.7, label='Convergence Threshold (75%)')
+    axes[0, 0].axhline(y=95.0, color='red', linestyle='--', alpha=0.7, label='Convergence Threshold (95%)')
     axes[0, 0].set_xlabel('Round')
     axes[0, 0].set_ylabel('Test Accuracy (%)')
     axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
 
     # 2. Rounds to Convergence Comparison
-    axes[0, 1].set_title('Rounds to Convergence\n(CNN Vision Efficiency)', fontsize=12, fontweight='bold')
+    axes[0, 1].set_title('Rounds to Convergence\n(Efficiency Metric)', fontsize=12, fontweight='bold')
     conv_rounds = []
     strategy_names = []
     colors_used = []
     for i, (strategy, results) in enumerate(zip(strategies, all_results)):
-        rounds = results.get('rounds_to_convergence', 400)
+        rounds = results.get('rounds_to_convergence', 200)
         conv_rounds.append(rounds)
         strategy_names.append(strategy.upper())
         colors_used.append(colors[i])
@@ -1176,8 +1005,8 @@ def plot_convergence_analysis_cifar10(all_results, strategies):
         axes[0, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(conv_rounds)*0.01,
                        label, ha='center', va='bottom', fontweight='bold')
 
-    # 3. CNN Communication Efficiency Until Convergence
-    axes[0, 2].set_title('CNN Communication Efficiency\n(Until Vision Convergence)', fontsize=12, fontweight='bold')
+    # 3. Convergence Communication Efficiency
+    axes[0, 2].set_title('Communication Efficiency\n(Until Convergence)', fontsize=12, fontweight='bold')
     comm_eff = []
     for strategy, results in zip(strategies, all_results):
         final_acc = results['test_accuracies'][-1] if results['test_accuracies'] else 0
@@ -1191,8 +1020,8 @@ def plot_convergence_analysis_cifar10(all_results, strategies):
         axes[0, 2].text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(comm_eff)*0.01,
                        f'{val:.4f}', ha='center', va='bottom', fontweight='bold')
 
-    # 4. CNN Computational Efficiency Until Convergence
-    axes[1, 0].set_title('CNN Computational Efficiency\n(Until Vision Convergence)', fontsize=12, fontweight='bold')
+    # 4. Convergence Computational Efficiency
+    axes[1, 0].set_title('Computational Efficiency\n(Until Convergence)', fontsize=12, fontweight='bold')
     comp_eff = []
     for strategy, results in zip(strategies, all_results):
         final_acc = results['test_accuracies'][-1] if results['test_accuracies'] else 0
@@ -1206,8 +1035,8 @@ def plot_convergence_analysis_cifar10(all_results, strategies):
         axes[1, 0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(comp_eff)*0.01,
                        f'{val:.4f}', ha='center', va='bottom', fontweight='bold')
 
-    # 5. CNN Energy Efficiency Until Convergence
-    axes[1, 1].set_title('CNN Energy Efficiency\n(Until Vision Convergence)', fontsize=12, fontweight='bold')
+    # 5. Energy Efficiency Until Convergence
+    axes[1, 1].set_title('Energy Efficiency\n(Until Convergence)', fontsize=12, fontweight='bold')
     energy_eff = []
     for strategy, results in zip(strategies, all_results):
         final_acc = results['test_accuracies'][-1] if results['test_accuracies'] else 0
@@ -1221,15 +1050,15 @@ def plot_convergence_analysis_cifar10(all_results, strategies):
         axes[1, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(energy_eff)*0.01,
                        f'{val:.4f}', ha='center', va='bottom', fontweight='bold')
 
-    # 6. CIFAR-10 CNN Convergence Summary Table
-    axes[1, 2].set_title('CIFAR-10 CNN Convergence Summary', fontsize=12, fontweight='bold')
+    # 6. Convergence Summary Table
+    axes[1, 2].set_title('MNIST Convergence Summary', fontsize=12, fontweight='bold')
     summary_text = []
     for strategy, results in zip(strategies, all_results):
         if results['test_accuracies']:
             final_acc = results['test_accuracies'][-1]
-            rounds = results.get('rounds_to_convergence', 400)
+            rounds = results.get('rounds_to_convergence', 200)
             early_stop = "✓" if results.get('early_stopped', False) else "✗"
-
+            
             summary_text.append(
                 f"{strategy.upper()}:\n"
                 f"  Accuracy: {final_acc:.1f}%\n"
@@ -1239,27 +1068,26 @@ def plot_convergence_analysis_cifar10(all_results, strategies):
 
     axes[1, 2].text(0.05, 0.95, '\n'.join(summary_text), transform=axes[1, 2].transAxes,
                    fontsize=10, verticalalignment='top', fontfamily='monospace',
-                   bbox=dict(boxstyle="round,pad=0.3", facecolor='lightcyan', alpha=0.7))
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor='lightblue', alpha=0.7))
     axes[1, 2].set_xlim(0, 1)
     axes[1, 2].set_ylim(0, 1)
     axes[1, 2].axis('off')
 
     plt.tight_layout()
-    plt.savefig("cifar10_convergence_analysis.png", dpi=300, bbox_inches='tight', facecolor='white')
-    plt.close()
+    plt.show("mnist_convergence_analysis")
 
 # =================== MAIN RESEARCH EXPERIMENT ===================
 
-def run_research_grade_cifar10_experiment_early_stop(iid=True, num_rounds=400,
-                                                    num_clients=50, max_local_epochs=15):
-    """Run research-grade CIFAR-10 CNN experiment with global early stopping"""
+def run_research_grade_mnist_experiment_early_stop(iid=True, num_rounds=300,
+                                                   num_clients=50, max_local_epochs=15):
+    """Run research-grade MNIST MLP experiment with global early stopping"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
-    # Create federated CIFAR-10 dataset
+    # Create federated MNIST dataset
     data_type = "IID" if iid else "Non-IID"
-    print(f"Creating federated CIFAR-10 dataset ({data_type})...")
-    clients, test_loader, client_speeds = create_federated_cifar10(
+    print(f"Creating federated MNIST dataset ({data_type})...")
+    clients, test_loader, client_speeds = create_federated_mnist(
         num_clients=num_clients, batch_size=64, iid=iid, val_split=0.2
     )
 
@@ -1269,23 +1097,23 @@ def run_research_grade_cifar10_experiment_early_stop(iid=True, num_rounds=400,
     all_efficiency_trackers = []
 
     print(f"\n{'='*80}")
-    print(f"RESEARCH-GRADE CIFAR-10 CNN FEDERATED LEARNING WITH GLOBAL EARLY STOPPING")
-    print(f"Best Practices: Convergence Detection, Computer Vision Efficiency Analysis")
-    print(f"Max Rounds: {num_rounds} | Early Stop: 75.0% accuracy threshold")
-    print(f"Dataset: CIFAR-10 (10 object classes, 32x32 color images)")
-    print(f"Architecture: 5-layer CNN + depth-adaptive FC layers")
+    print(f"RESEARCH-GRADE MNIST MLP FEDERATED LEARNING WITH GLOBAL EARLY STOPPING")
+    print(f"Best Practices: Convergence Detection, Efficiency-to-Convergence Analysis")
+    print(f"Max Rounds: {num_rounds} | Early Stop: 95.0% accuracy threshold")
+    print(f"Dataset: MNIST (10 digit classes, 28x28 grayscale images)")
+    print(f"Architecture: 4-layer MLP (784-512-256-128-64-10)")
     print(f"{'='*80}")
 
     # Run experiments for each strategy
     for strategy in strategies:
         print(f"\n{'='*80}")
-        print(f"Running {strategy.upper()} - CIFAR-10 CNN with Global Early Stopping")
+        print(f"Running {strategy.upper()} - MLP with Global Early Stopping")
         print(f"{'='*80}")
 
         set_seed(42)  # Reset seed for fair comparison
 
         start_time = time.time()
-        global_model, results, straggler_tracker, efficiency_tracker = research_grade_federated_training_cifar10_with_early_stopping(
+        global_model, results, straggler_tracker, efficiency_tracker = research_grade_federated_training_mnist_with_early_stopping(
             clients=clients,
             client_speeds=client_speeds,
             max_rounds=num_rounds,
@@ -1303,14 +1131,14 @@ def run_research_grade_cifar10_experiment_early_stop(iid=True, num_rounds=400,
         all_straggler_trackers.append(straggler_tracker)
         all_efficiency_trackers.append(efficiency_tracker)
 
-        # CNN convergence summary
+        # Convergence summary
         if results['test_accuracies']:
             final_acc = results['test_accuracies'][-1]
             rounds_to_conv = results.get('rounds_to_convergence', num_rounds)
             early_stopped = results.get('early_stopped', False)
             conv_status = "CONVERGED EARLY" if early_stopped else "NO CONVERGENCE"
 
-            print(f"\n{strategy.upper()} CIFAR-10 CNN CONVERGENCE RESULTS:")
+            print(f"\n{strategy.upper()} CONVERGENCE RESULTS:")
             print(f"   Final Accuracy: {final_acc:.2f}%")
             print(f"   Convergence Status: {conv_status}")
             print(f"   Rounds to Convergence: {rounds_to_conv}")
@@ -1318,20 +1146,20 @@ def run_research_grade_cifar10_experiment_early_stop(iid=True, num_rounds=400,
 
     # Generate convergence analysis
     print(f"\n{'='*80}")
-    print("GENERATING CIFAR-10 CNN CONVERGENCE EFFICIENCY ANALYSIS")
+    print("GENERATING CONVERGENCE EFFICIENCY ANALYSIS")
     print(f"{'='*80}")
 
-    analysis_summary = analyze_comprehensive_research_performance_cifar10_early_stop(
+    analysis_summary = analyze_comprehensive_research_performance_mnist_early_stop(
         all_results, strategies, all_straggler_trackers, all_efficiency_trackers
     )
-    plot_convergence_analysis_cifar10(all_results, strategies)
+    plot_convergence_analysis_mnist(all_results, strategies)
 
     return all_results, all_straggler_trackers, all_efficiency_trackers, analysis_summary
 
 # =================== CLUSTER ENVIRONMENT SETUP ===================
 
 def setup_research_environment():
-    """Setup research-grade environment for CIFAR-10"""
+    """Setup research-grade environment for MNIST"""
     plt.ioff()
 
     if torch.cuda.is_available():
@@ -1346,21 +1174,35 @@ def setup_research_environment():
 
     print("Research environment setup complete")
 
+def save_plot_for_publication():
+    """Replace plt.show() with publication-quality saving"""
+    original_show = plt.show
+
+    def publication_show(filename_prefix="plot"):
+        timestamp = int(time.time())
+        filename = f"./plots/{filename_prefix}_{timestamp}.png"
+        plt.savefig(filename, dpi=300, bbox_inches='tight', facecolor='white')
+        print(f"Publication-quality plot saved: {filename}")
+        plt.close()
+
+    plt.show = publication_show
+
 # =================== MAIN EXECUTION ===================
 
 if __name__ == "__main__":
     setup_research_environment()
-
+    save_plot_for_publication()
+    
     NUM_CLIENTS = 50
     MAX_LOCAL_EPOCHS = 15
-    NUM_ROUNDS = 400  # Higher max since CNN convergence takes longer
+    NUM_ROUNDS = 300  # Higher max since we expect early stopping
 
-    print("Starting Research-Grade CIFAR-10 CNN Federated Learning with Global Early Stopping")
-    print(f"Max Rounds: {NUM_ROUNDS} | Early Stop Target: 75.0% accuracy")
+    print("Starting Research-Grade MNIST Federated Learning with Global Early Stopping")
+    print(f"Max Rounds: {NUM_ROUNDS} | Early Stop Target: 95.0% accuracy")
     print(f"Clients: {NUM_CLIENTS} | Strategies: FedAvg, FedPMT, FedDrop, DLA")
 
     # Run research-grade experiment with early stopping
-    experiment_results = run_research_grade_cifar10_experiment_early_stop(
+    experiment_results = run_research_grade_mnist_experiment_early_stop(
         iid=True,
         num_rounds=NUM_ROUNDS,
         num_clients=NUM_CLIENTS,
@@ -1370,11 +1212,11 @@ if __name__ == "__main__":
     if experiment_results:
         all_results, straggler_trackers, efficiency_trackers, analysis_summary = experiment_results
 
-        print("\nResearch-Grade CIFAR-10 CNN Early Stopping Experiment Complete!")
-        print("Computer vision convergence efficiency analysis generated!")
+        print("\nResearch-Grade MNIST Early Stopping Experiment Complete!")
+        print("Convergence efficiency analysis generated!")
 
         # Save results
-        print("\nSaving CIFAR-10 CNN convergence analysis results...")
+        print("\nSaving convergence analysis results...")
         try:
             serializable_results = []
             for result in all_results:
@@ -1389,36 +1231,36 @@ if __name__ == "__main__":
                     'num_clients': NUM_CLIENTS,
                     'max_local_epochs': MAX_LOCAL_EPOCHS,
                     'early_stopping': True,
-                    'convergence_threshold': 75.0,
-                    'patience': 20,
+                    'convergence_threshold': 95.0,
+                    'patience': 15,
                     'strategies': ["fedavg", "fedpmt", "feddrop", "dla"],
-                    'dataset': 'CIFAR-10',
-                    'architecture': 'CNN'
+                    'dataset': 'MNIST',
+                    'architecture': 'MLP'
                 },
                 'metadata': {
                     'timestamp': time.time(),
                     'convergence_framework': 'Global Early Stopping',
                     'best_practices_applied': [
                         'Global early stopping with convergence detection',
-                        'CIFAR-10-specific convergence thresholds',
-                        'CNN efficiency-to-convergence metrics',
-                        'Comprehensive CNN convergence tracking',
-                        'Realistic computer vision federated learning'
+                        'Dataset-specific convergence thresholds',
+                        'Efficiency-to-convergence metrics',
+                        'Comprehensive convergence tracking',
+                        'Realistic federated learning scenarios'
                     ]
                 }
             }
 
-            with open('./results/cifar10_cnn_early_stop_results.json', 'w') as f:
+            with open('./results/mnist_early_stop_results.json', 'w') as f:
                 json.dump(research_data, f, indent=2)
 
-            print("Results saved to ./results/cifar10_cnn_early_stop_results.json")
+            print("Results saved to ./results/mnist_early_stop_results.json")
             print("Publication-quality plots saved to ./plots/ directory")
-            print("CIFAR-10 CNN Global Early Stopping experiment completed successfully!")
+            print("MNIST Global Early Stopping experiment completed successfully!")
 
         except Exception as e:
             print(f"Warning: Could not save JSON results due to: {e}")
             print("Experiment completed successfully, but results not saved to file")
 
     else:
-        print("CIFAR-10 CNN early stopping experiment failed!")
+        print("MNIST early stopping experiment failed!")
         sys.exit(1)
