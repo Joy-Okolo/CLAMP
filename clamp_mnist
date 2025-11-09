@@ -298,7 +298,7 @@ class ResearchGradeEfficiencyTracker:
         if strategy == "fedavg":
             downstream_bytes = full_model_size
             upstream_bytes = full_model_size
-        elif strategy in ["fedpmt", "feddrop", "dla"]:
+        elif strategy in ["fedpmt", "feddrop", "clamp"]:
             downstream_bytes = full_model_size
             upstream_bytes = active_model_size
         else:
@@ -465,7 +465,7 @@ def train_locally_with_monitoring(model, train_loader, val_loader, layers_to_upd
     return (model.state_dict(), elapsed_time, final_train_loss,
             final_val_accuracy, epochs_trained, train_losses, val_losses, val_accuracies)
 
-# =================== DLA IMPLEMENTATION ===================
+# =================== CLAMP IMPLEMENTATION ===================
 
 def adjust_layers_improved(elapsed_time, current_depth, client_id,
                          T_low=8.0, T_high=25.0, max_layers=5):
@@ -480,8 +480,8 @@ def adjust_layers_improved(elapsed_time, current_depth, client_id,
     else:
         return current_depth
 
-class DLAStabilityTracker:
-    """Enhanced DLA stability tracking"""
+class CLAMPStabilityTracker:
+    """Enhanced CLAMP stability tracking"""
     def __init__(self, num_clients):
         self.adaptation_history = {cid: [] for cid in range(num_clients)}
         self.consecutive_suggestions = {cid: {'increase': 0, 'decrease': 0, 'stay': 0}
@@ -682,9 +682,9 @@ def research_grade_federated_training_mnist_with_early_stopping(clients, client_
         'early_stopped': False
     }
 
-    # Initialize DLA components
+    # Initialize CLAMP components
     current_depths = {cid: 3 for cid in range(len(clients))}
-    dla_tracker = DLAStabilityTracker(len(clients)) if strategy == "dla" else None
+    clamp_tracker = CLAMPStabilityTracker(len(clients)) if strategy == "clamp" else None
 
     print(f"\nRESEARCH-GRADE MNIST FEDERATED LEARNING WITH GLOBAL EARLY STOPPING")
     print(f"Strategy: {strategy.upper()}")
@@ -713,7 +713,7 @@ def research_grade_federated_training_mnist_with_early_stopping(clients, client_
                 layer_depth = fixed_depth
             elif strategy == "feddrop":
                 layer_depth = random.randint(1, max_layers)
-            elif strategy == "dla":
+            elif strategy == "clamp":
                 layer_depth = current_depths[cid]
             else:
                 raise ValueError(f"Unknown strategy: {strategy}")
@@ -758,11 +758,11 @@ def research_grade_federated_training_mnist_with_early_stopping(clients, client_
                       f"(↓{comm['downstream_bytes']/1024:.1f}KB + ↑{comm['upstream_bytes']/1024:.1f}KB), "
                       f"Energy={efficiency_metrics['energy']:.1f}J")
 
-            # DLA depth adaptation (MNIST-specific thresholds)
-            if strategy == "dla":
+            # CLAMP depth adaptation (MNIST-specific thresholds)
+            if strategy == "clamp":
                 suggested_depth = adjust_layers_improved(elapsed_time, layer_depth, cid,
                                                        T_low=8.0, T_high=25.0, max_layers=max_layers)
-                new_depth = dla_tracker.should_adapt(cid, layer_depth, suggested_depth,
+                new_depth = clamp_tracker.should_adapt(cid, layer_depth, suggested_depth,
                                                     client_performance=final_val_accuracy, stability_threshold=3)
                 current_depths[cid] = new_depth
 
@@ -1091,7 +1091,7 @@ def run_research_grade_mnist_experiment_early_stop(iid=True, num_rounds=300,
         num_clients=num_clients, batch_size=64, iid=iid, val_split=0.2
     )
 
-    strategies = ["fedavg", "fedpmt", "feddrop", "dla"]
+    strategies = ["fedavg", "fedpmt", "feddrop", "clamp"]
     all_results = []
     all_straggler_trackers = []
     all_efficiency_trackers = []
@@ -1199,7 +1199,7 @@ if __name__ == "__main__":
 
     print("Starting Research-Grade MNIST Federated Learning with Global Early Stopping")
     print(f"Max Rounds: {NUM_ROUNDS} | Early Stop Target: 95.0% accuracy")
-    print(f"Clients: {NUM_CLIENTS} | Strategies: FedAvg, FedPMT, FedDrop, DLA")
+    print(f"Clients: {NUM_CLIENTS} | Strategies: FedAvg, FedPMT, FedDrop, CLAMP")
 
     # Run research-grade experiment with early stopping
     experiment_results = run_research_grade_mnist_experiment_early_stop(
@@ -1233,7 +1233,7 @@ if __name__ == "__main__":
                     'early_stopping': True,
                     'convergence_threshold': 95.0,
                     'patience': 15,
-                    'strategies': ["fedavg", "fedpmt", "feddrop", "dla"],
+                    'strategies': ["fedavg", "fedpmt", "feddrop", "clamp"],
                     'dataset': 'MNIST',
                     'architecture': 'MLP'
                 },
