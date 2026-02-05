@@ -14,7 +14,7 @@ The project compares several federated learning strategies:
 - FedAvg – standard federated averaging with full model training  
 - FedPMT – partial model training with a fixed number of layers updated  
 - FedDrop – randomly drops layers to simulate lighter local computation  
-- DLA (Dynamic Layer Adaptation) – adapts how many layers each client trains based on its speed and performance
+- CLAMP – adapts how many layers each client trains based on its speed and performance
 
 Key components in the code include:
 - GlobalConvergenceTracker – detects when global training has truly converged  
@@ -51,7 +51,7 @@ CIFAR-10 “no round limit” experiment
 python clamp_cifar10.py
 
 This will create federated CIFAR-10 clients
-Run FedAvg, FedPMT, FedDrop, and DLA
+Run FedAvg, FedPMT, FedDrop, and CLAMP
 Train until a target test accuracy (e.g., 75%) is reached or a safety round limit is hit
 Track FLOPs, communication, stragglers, and convergence information
 Save plots to ./plots and metrics to ./results
